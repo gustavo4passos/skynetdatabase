@@ -33,3 +33,7 @@
 
 # vscode
 .vscode
+
+# build folders
+build/
+bin/
