@@ -44,7 +44,7 @@ void Database::CreateMainDataFile()
     Header h = { N, m_level, N, m_next };
     m_mainDataFile.write((const char*)&h, sizeof(Header));
 
-    m_mainDataFile.seekp(N * ENTRIES_PER_PAGE * HEADER_SIZE - 1);
+    m_mainDataFile.seekp(N * ENTRIES_PER_PAGE * INDEX_HEADER_SIZE + HEADER_SIZE - 1);
     m_mainDataFile.write("", 1);
     m_mainDataFile.close();
 

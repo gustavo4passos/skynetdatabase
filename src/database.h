@@ -34,6 +34,7 @@ private:
     const unsigned ENTRIES_PER_PAGE = 11;
     const char* MAIN_DATA_FILE_NAME = "data.dat";
     const unsigned HEADER_SIZE = sizeof(Header);
+    const unsigned INDEX_HEADER_SIZE = sizeof(IndexHeader);
 
     #pragma pack(push, 1)
     struct Header
@@ -48,8 +49,8 @@ private:
     #pragma pack(push, 1)
     struct IndexHeader
     {
-        unsigned N;
-        unsigned next;
+        unsigned numberOfExtensions;
+        unsigned numberOfEntries;
     };
     #pragma pack(pop)
 
