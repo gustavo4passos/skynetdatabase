@@ -12,12 +12,14 @@ Database::Database()
     }
 
     // Read header data
-    Header header = { 0, 0, 0, 0 };
-    m_mainDataFile.read((char*)&header, sizeof(Header));
+    Header header = { 0, 0, 0, 0 , 0, 0 };
+    m_mainDataFile.read((char*)&header, HEADER_SIZE);
     m_level = header.level;
+    m_numberOfEntries = header.numberOfEntries;
     m_numberOfPages = header.numberOfPages;
-    m_numberOfEntries = header.numberOfEntires;
+    m_numberOfIndices = header.numberOfIndices;
     m_next = header.next;
+    m_currentMaxExtension = header.currentMaxExtension;
 }
 
 Database::~Database()
@@ -33,16 +35,24 @@ int Database::InsertEntry(const char key[21], const char value[51])
     m_mainDataFile.seekp(indexOffset, std::ios::beg);
     IndexHeader ih;
     m_mainDataFile.read((char*)&ih, INDEX_HEADER_SIZE);
-    std::streampos firstEmptyPos = m_mainDataFile.tellp();
+    unsigned firstEmptyPos = 0;
 
     // If there are entries, find the first empty slot.
     // Otherwise, just write at the first slot.
     if(ih.numberOfEntries != 0)
     {
-        firstEmptyPos = FindFirstEmptySlot();
+        // Check if entry is full
+        if(ih.numberOfEntries == (ih.numberOfExtensions + 1) * ENTRIES_PER_PAGE)
+        {
+            ExtendIndex(hash);
+            // Update index header value
+            ih.numberOfExtensions++;
+        }
+
+        firstEmptyPos = FindFirstEmptySlot(hash);
     }
 
-    WriteEntryAtPosition(key, value, firstEmptyPos);
+    WriteEntry(hash, firstEmptyPos, key, value);
     
     // Update database header (only in memory)
     // The final value is stored only when the program is closed
@@ -57,9 +67,8 @@ int Database::InsertEntry(const char key[21], const char value[51])
 
     // Update index header
     ih.numberOfEntries++;
-    m_mainDataFile.seekp(indexOffset);
-    m_mainDataFile.write((const char*)&ih, INDEX_HEADER_SIZE);
-
+    
+    UpdateIndexHeader(hash, ih);
     UpdateMainHeader();
 
     return 0;
@@ -67,20 +76,41 @@ int Database::InsertEntry(const char key[21], const char value[51])
 
 int Database::GetEntry(const char key[21], char outValue[51])
 {
+    std::fstream* dataFile = &m_mainDataFile;
     unsigned index_offset = CalcIndexOffsetFromKey(key);
+    unsigned hash = CalcHash(key);
 
-    unsigned offset = index_offset + INDEX_HEADER_SIZE;
-    m_mainDataFile.seekg(offset, std::ios::beg);
-    while(offset < index_offset + INDEX_SIZE)
+    dataFile->seekg(index_offset);
+    IndexHeader ih;
+    dataFile->read((char *)&ih, INDEX_HEADER_SIZE);
+
+    // There are no entries
+    if(ih.numberOfEntries == 0) return 0;
+
+    unsigned index = 0;
+    unsigned entryNumber = 0;
+    while(true)
     {
-        Entry e = { 0, 0, 0, 0};
-        m_mainDataFile.read((char *)&e, ENTRY_SIZE);
-        offset += ENTRY_SIZE;
+        Entry e = { 0, 0 };
+        dataFile->read((char *)&e, ENTRY_SIZE);
 
-        if(strcmp(e.key, key) == 0)
+        if(!IsEntryEmpty(&e))
         {
-            strcpy(outValue, e.value);
-            return 1;
+            if(strcmp(e.key, key) == 0)
+            {
+                strcpy(outValue, e.value);
+                return 1;
+            }
+            entryNumber++;
+            // All entries have been verified
+            if(entryNumber == ih.numberOfEntries) return 0;
+        }
+
+        index++;
+        if(index % ENTRIES_PER_PAGE == 0)
+        {
+            dataFile = GetExtensionFile(index / ENTRIES_PER_PAGE);
+            dataFile->seekg(hash * INDEX_SIZE);
         }
     }
 
@@ -89,7 +119,7 @@ int Database::GetEntry(const char key[21], char outValue[51])
 
 bool Database::OpenMainDataFile()
 {
-    m_mainDataFile.open(MAIN_DATA_FILE_NAME, 
+    m_mainDataFile.open(DATA_FILE_NAME_PREFIX + DATA_FILE_NAME_EXTENSION,
         std::fstream::in    |
         std::fstream::out   | 
         std::fstream::binary);
@@ -100,18 +130,18 @@ bool Database::OpenMainDataFile()
 void Database::CreateMainDataFile()
 {
     m_mainDataFile.close();
-    m_mainDataFile.open(MAIN_DATA_FILE_NAME, 
+    m_mainDataFile.open(DATA_FILE_NAME_PREFIX + DATA_FILE_NAME_EXTENSION, 
     std::fstream::out   | 
     std::fstream::binary);
 
     m_level = 0;
     m_next = 0;
-    Header h = { N, m_level, N, 0, m_next };
+    Header h = { N, m_level, N, 0, N, m_next, 0 };
     m_mainDataFile.write((const char*)&h, sizeof(Header));
 
     // Fill file with empty data
     m_mainDataFile.seekp(
-        N * INDEX_SIZE + HEADER_SIZE - 1);
+        N * MAIN_INDEX_SIZE + HEADER_SIZE - 1);
     m_mainDataFile.write("", 1);
     m_mainDataFile.close();
 
@@ -121,9 +151,23 @@ void Database::CreateMainDataFile()
 void Database::UpdateMainHeader()
 {
     // Stores header data to file
-    Header h = { N, m_level, m_numberOfPages, m_numberOfEntries, m_next };
+    Header h = { 
+        N, 
+        m_level, 
+        m_numberOfPages, 
+        m_numberOfEntries, 
+        m_numberOfIndices, 
+        m_next,
+        m_currentMaxExtension
+    };
     m_mainDataFile.seekp(std::ios::beg);
     m_mainDataFile.write((const char*)&h, sizeof(Header));
+}
+
+void Database::UpdateIndexHeader(unsigned index, const IndexHeader& ih)
+{
+    m_mainDataFile.seekp(CalcIndexOffset(index));
+    m_mainDataFile.write((const char*)&ih, INDEX_HEADER_SIZE);
 }
 
 unsigned Database::CalcHash(const char key[21])
@@ -141,7 +185,7 @@ unsigned Database::TwoToThePower(int exponent)
 
 unsigned Database::CalcIndexOffset(int index, bool isMainFile)
 {
-    return (isMainFile ? HEADER_SIZE : 0) + index * INDEX_SIZE;
+    return (isMainFile ? HEADER_SIZE : 0) + index * ((isMainFile ? INDEX_HEADER_SIZE : 0) + INDEX_SIZE);
 }
 
 unsigned Database::CalcIndexOffsetFromKey(const char key[21])
@@ -149,19 +193,28 @@ unsigned Database::CalcIndexOffsetFromKey(const char key[21])
     return CalcIndexOffset(CalcHash(key));
 }
 
-std::streampos Database::FindFirstEmptySlot()
+unsigned Database::FindFirstEmptySlot(unsigned index)
 {
-    unsigned startOffset = m_mainDataFile.tellp();
-    while(m_mainDataFile.tellp() < startOffset + INDEX_SIZE)
+    std::fstream* dataFile = &m_mainDataFile;
+    dataFile->seekg(CalcIndexOffset(index, true) + INDEX_HEADER_SIZE);
+
+    unsigned currentIndex = 0;
+    while(true)
     {
-        char check = '\0';
-        m_mainDataFile.read(&check, 1);
-        if(check == '\0') return ((int)m_mainDataFile.tellp() - 1);
-        m_mainDataFile.seekp((int)m_mainDataFile.tellp() + ENTRY_SIZE - 1);
+        Entry e = { 0, 0 };
+        dataFile->read((char *)&e, ENTRY_SIZE);
+
+        if(IsEntryEmpty(&e)) return currentIndex;
+
+        currentIndex++;
+        if(currentIndex % ENTRIES_PER_PAGE == 0)
+        {
+            dataFile = GetExtensionFile(currentIndex / ENTRIES_PER_PAGE);
+            dataFile->seekg(CalcIndexOffset(index, false));
+        }
     }
 
-
-    if(!m_mainDataFile.good()) std::cout << "Stream is bad!" << std::endl;
+    if(!dataFile->good()) std::cout << "Stream is bad!" << std::endl;
     return -1;
 }
 
@@ -175,18 +228,50 @@ void Database::WriteEntryAtPosition(
     m_mainDataFile.write((const char*)value, 51);
 }
 
+void Database::WriteEntry(
+    int index,
+    int position,
+    const char key[21],
+    const char value[51])
+{
+    std::fstream* file = &m_mainDataFile;
+
+    unsigned offset = 0;
+    int extensionNumber = position / ENTRIES_PER_PAGE;
+    if(extensionNumber == 0)
+    {
+        offset = CalcIndexOffset(index, true) + INDEX_HEADER_SIZE;
+    }
+    else
+    {
+        file = GetExtensionFile(extensionNumber);
+        offset = CalcIndexOffset(index, false);
+    }
+
+    file->seekp(offset + (position % ENTRIES_PER_PAGE) * ENTRY_SIZE);
+    file->write(key, 21);
+    file->write(value, 51);
+}
+
+bool Database::IsEntryEmpty(const Entry* entry)
+{
+    return entry->key[0] == '\0';
+}
+
 void Database::SplitPage(unsigned page)
 {
     m_numberOfPages++;
+    m_numberOfIndices++;
     // Advances next pointer
     m_next = (m_next + 1) % (N * (m_level + 1));
     if(m_next == 0) m_level++;
 
     // Fill the next page with 0's
-    m_mainDataFile.seekp((m_numberOfPages + 1) * INDEX_SIZE + HEADER_SIZE - 2);
+    m_mainDataFile.seekp((m_numberOfPages + 1) * MAIN_INDEX_SIZE + HEADER_SIZE - 2);
     m_mainDataFile.write("", 1);
 
     DistributeEntries(page);
+    UpdateMainHeader();
 }
 
 void Database::DistributeEntries(unsigned page)
@@ -243,4 +328,88 @@ void Database::DistributeEntries(unsigned page)
     // Write header to file
     m_mainDataFile.seekp(CalcIndexOffset(page));
     m_mainDataFile.write((const char*)&originalIndexHeader, INDEX_HEADER_SIZE);
+}
+
+void Database::ExtendIndex(unsigned index)
+{
+    m_mainDataFile.seekg(CalcIndexOffset(index));
+    IndexHeader ih;    
+    m_mainDataFile.read((char*)&ih, INDEX_HEADER_SIZE);
+
+    if(ih.numberOfExtensions + 1 > m_currentMaxExtension)
+    {
+        CreateExtensionFile(ih.numberOfExtensions + 1);
+        m_currentMaxExtension++;
+    }
+
+    m_numberOfPages++;
+    UpdateMainHeader();
+}
+
+void Database::CreateExtensionFile(unsigned extensionNumber)
+{
+    if(m_indexExtensionsDataFiles.size() == MAX_SIMULTANEOUS_EXTENSIONS_OPEN)
+    {
+        m_indexExtensionsDataFiles.front().second.close();
+        m_indexExtensionsDataFiles.erase(m_indexExtensionsDataFiles.begin());
+    }
+
+    m_indexExtensionsDataFiles.push_back(
+        std::make_pair(extensionNumber, std::fstream()));
+
+    m_indexExtensionsDataFiles.back().second.open(
+        DATA_FILE_NAME_PREFIX           +
+        std::to_string(extensionNumber) +
+        DATA_FILE_NAME_EXTENSION,
+        std::fstream::out   |
+        std::fstream::binary
+    );
+
+    m_indexExtensionsDataFiles.back().second.seekp(
+        ENTRY_SIZE * m_numberOfIndices + INDEX_SIZE - 1);
+    m_indexExtensionsDataFiles.back().second.write("\0", 1);
+
+    m_indexExtensionsDataFiles.back().second.close();
+
+    m_indexExtensionsDataFiles.back().second.open(
+        DATA_FILE_NAME_PREFIX           +
+        std::to_string(extensionNumber) +
+        DATA_FILE_NAME_EXTENSION,
+        std::fstream::in    |
+        std::fstream::out   |
+        std::fstream::binary
+    );
+
+    UpdateMainHeader(); 
+}
+
+std::fstream* Database::GetExtensionFile(unsigned extensionNumber)
+{
+    for(auto ep = m_indexExtensionsDataFiles.begin();
+        ep != m_indexExtensionsDataFiles.end();
+        ep++)
+    {
+        if(ep->first == extensionNumber) return &ep->second;
+    }
+
+    if(m_indexExtensionsDataFiles.size() == MAX_SIMULTANEOUS_EXTENSIONS_OPEN)
+    {
+        m_indexExtensionsDataFiles.front().second.close();
+        m_indexExtensionsDataFiles.erase(m_indexExtensionsDataFiles.begin());
+    }
+
+    m_indexExtensionsDataFiles.push_back(
+        std::make_pair(extensionNumber, std::fstream())
+    );
+
+    m_indexExtensionsDataFiles.back().second.open(
+        DATA_FILE_NAME_PREFIX           +
+        std::to_string(extensionNumber) +
+        DATA_FILE_NAME_EXTENSION,
+        std::fstream::in    |
+        std::fstream::out   |
+        std::fstream::binary
+    );
+
+    return &(m_indexExtensionsDataFiles.back().second);
 }
