@@ -7,6 +7,7 @@
 #pragma once
 
 #include <fstream>
+#include <string>
 #include <vector>
 
 #pragma pack(push, 1)
@@ -17,7 +18,29 @@ struct Entry
 };
 #pragma pack(pop)
 
-class Database {
+#pragma pack(push, 1)
+struct Header
+{
+    unsigned N;
+    unsigned level;
+    unsigned numberOfPages;
+    unsigned numberOfEntries;
+    unsigned numberOfIndices;
+    unsigned next;
+    unsigned currentMaxExtension;
+};
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+struct IndexHeader
+{
+    unsigned numberOfExtensions;
+    unsigned numberOfEntries;
+};
+#pragma pack(pop)
+
+class Database 
+{
 public:
     explicit Database();
     ~Database();
@@ -32,7 +55,7 @@ public:
 
 private:
     std::fstream m_mainDataFile;
-    std::vector<std::fstream> m_extensionPages;
+    std::vector< std::pair<unsigned, std::fstream> > m_indexExtensionsDataFiles;
 
     // Tries to open the main data file.
     // Returns true if the file was successfully opened.
@@ -53,6 +76,7 @@ private:
 
     // Store the database current state to the main data file
     void UpdateMainHeader();
+    void UpdateIndexHeader(unsigned index, const IndexHeader& ih);
 
     unsigned CalcHash(const char key[21]);
 
@@ -65,50 +89,54 @@ private:
     // key[21] hashes to
     unsigned CalcIndexOffsetFromKey(const char key[21]);
 
-    // Finds the file offset which represents the first empty slot 
-    // of an index
-    std::streampos FindFirstEmptySlot();
+    // Finds the first empty slot in an index (considering extensions)
+    unsigned FindFirstEmptySlot(unsigned index);
+
     void WriteEntryAtPosition(
         const char key[21], 
         const char value[51], 
         const std::streampos& pos
+
     );
+
+    void WriteEntry(
+        int index,
+        int position,
+        const char key[21],
+        const char value[51]
+    );
+
+    bool IsEntryEmpty(const Entry* entry);
 
     void SplitPage(unsigned page);
     void DistributeEntries(unsigned page);
+    void ExtendIndex(unsigned index);
+    void CreateExtensionFile(unsigned extensionNumber);
+
+    // Retrieves extension file
+    // If file is already opened, find it and return it
+    // Otherwise, open it, and return it
+    // Attension: The extension file must already exist,
+    // or the behavior of the function is undefined
+    std::fstream* GetExtensionFile(unsigned extensionNumber);
 
     unsigned m_level;
     unsigned m_next;
     unsigned m_numberOfEntries;
+    unsigned m_numberOfIndices;
     unsigned m_numberOfPages;
-    
+    unsigned m_currentMaxExtension;
+
     const float MIN_LIMIT = 0.3f;
     const float MAX_LIMIT = 0.8f;
     const unsigned N = 3;
     const unsigned ENTRIES_PER_PAGE = 2;
-    const char* MAIN_DATA_FILE_NAME = "data.dat";
+    const std::string DATA_FILE_NAME_PREFIX = "data";
+    const std::string DATA_FILE_NAME_EXTENSION = ".dat";
     const unsigned HEADER_SIZE = sizeof(Header);
     const unsigned ENTRY_SIZE = sizeof(Entry);
     const unsigned INDEX_HEADER_SIZE = sizeof(IndexHeader);
-    const unsigned INDEX_SIZE = INDEX_HEADER_SIZE + ENTRIES_PER_PAGE * ENTRY_SIZE;
-
-    #pragma pack(push, 1)
-    struct Header
-    {
-        unsigned N;
-        unsigned level;
-        unsigned numberOfPages;
-        unsigned numberOfEntires;
-        unsigned next;
-    };
-    #pragma pack(pop)
-
-    #pragma pack(push, 1)
-    struct IndexHeader
-    {
-        unsigned numberOfExtensions;
-        unsigned numberOfEntries;
-    };
-    #pragma pack(pop)
-
+    const unsigned INDEX_SIZE = ENTRIES_PER_PAGE * ENTRY_SIZE;
+    const unsigned MAIN_INDEX_SIZE = INDEX_SIZE + INDEX_HEADER_SIZE;
+    const unsigned MAX_SIMULTANEOUS_EXTENSIONS_OPEN = 5;
 };
