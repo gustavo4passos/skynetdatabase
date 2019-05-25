@@ -37,3 +37,6 @@
 # build folders
 build/
 bin/
+
+# tests folder
+tests/

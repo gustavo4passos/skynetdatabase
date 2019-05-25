@@ -240,8 +240,19 @@ void Database::UpdateIndexHeader(unsigned index, const IndexHeader& ih)
 
 unsigned Database::CalcHash(const char key[21])
 {
-    unsigned hash = (unsigned)key[0] % (N * TwoToThePower(m_level));
-    if(hash < m_next) return (unsigned)key[0] % (N * TwoToThePower(m_level + 1));
+    int i = 0;
+    unsigned fnvprime = 16777619;
+    unsigned offsetbasis = 2166136261;
+    unsigned initialhash = offsetbasis;
+    while(key[i] != '\0')
+    {
+        initialhash = initialhash ^ key[i];
+        initialhash *= fnvprime;
+        i++;
+    }
+
+    unsigned hash = initialhash % (N * TwoToThePower(m_level));
+    if(hash < m_next) return initialhash % (N * TwoToThePower(m_level + 1));
     return hash;
 }
 
