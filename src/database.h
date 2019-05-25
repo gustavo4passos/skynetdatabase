@@ -50,7 +50,7 @@ public:
     // Stores entry into outValue if entry is found in the database.
     // Returns 1, if entry is found.
     // Returns 0 otherwise, and keeps outValue unchanged
-    int GetEntry(const char key[21], char outValue[21]);
+    int GetEntry(const char key[21], std::vector<std::string>& outValues);
     int DeleteEntry(const char key[21]);
 
 private:
@@ -137,8 +137,8 @@ private:
 
     const float MIN_LIMIT = 0.3f;
     const float MAX_LIMIT = 0.8f;
-    const unsigned N = 3;
-    const unsigned ENTRIES_PER_PAGE = 2;
+    const unsigned N = 29;
+    const unsigned ENTRIES_PER_PAGE = 11;
     const std::string DATA_FILE_NAME_PREFIX = "data";
     const std::string DATA_FILE_NAME_EXTENSION = ".dat";
     const unsigned HEADER_SIZE = sizeof(Header);

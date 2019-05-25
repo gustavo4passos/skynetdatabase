@@ -72,8 +72,9 @@ int Database::InsertEntry(const char key[21], const char value[51])
     return 0;
 }
 
-int Database::GetEntry(const char key[21], char outValue[51])
+int Database::GetEntry(const char key[21], std::vector<std::string>& outValues)
 {
+    bool anyEntryFound = false;
     std::fstream* dataFile = &m_mainDataFile;
     unsigned index_offset = CalcIndexOffsetFromKey(key);
     unsigned hash = CalcHash(key);
@@ -96,12 +97,13 @@ int Database::GetEntry(const char key[21], char outValue[51])
         {
             if(strcmp(e.key, key) == 0)
             {
-                strcpy(outValue, e.value);
-                return 1;
+                outValues.push_back(e.value);
+                anyEntryFound = true;
+                // strcpy(outValue, e.value);
             }
             entryNumber++;
             // All entries have been verified
-            if(entryNumber == ih.numberOfEntries) return 0;
+            if(entryNumber == ih.numberOfEntries) break;
         }
 
         index++;
@@ -112,6 +114,7 @@ int Database::GetEntry(const char key[21], char outValue[51])
         }
     }
 
+    if(anyEntryFound) return 1;
     return 0;
 }
 

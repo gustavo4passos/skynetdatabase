@@ -25,16 +25,19 @@ int main(int argc, char* args[])
         {
             std::cout << "Which key to search for >> ";
             char searchToken[21];
-            char valueFound[51];
             std::cin.getline(searchToken, 21);
 
-            if(db.GetEntry(searchToken, valueFound) == 0)
+            std::vector<std::string> values;
+            if(db.GetEntry(searchToken, values) == 0)
             {
                 std::cout << "No such key exists." << std::endl;
             }
             else
             {
-                std::cout << "Value: " << valueFound << std::endl;
+                for(unsigned i = 0; i < values.size(); i++)
+                {
+                    std::cout << "Value: " << values[i] << std::endl;
+                }
             }
         }
         else if(c[0] == 'r')
