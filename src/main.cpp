@@ -14,7 +14,7 @@ int main(int argc, char* args[])
         if(c[0] == 'i')
         {
             char key[21];
-            char value[51];;
+            char value[51];
             std::cout << "Type a key >> ";
             std::cin.getline(key, 21);
             std::cout << "Type a value >>";
@@ -23,7 +23,7 @@ int main(int argc, char* args[])
         }
         else if(c[0] == 'c')
         {
-            std::cout << "Type key to search for>> ";
+            std::cout << "Which key to search for >> ";
             char searchToken[21];
             char valueFound[51];
             std::cin.getline(searchToken, 21);
@@ -35,6 +35,17 @@ int main(int argc, char* args[])
             else
             {
                 std::cout << "Value: " << valueFound << std::endl;
+            }
+        }
+        else if(c[0] == 'r')
+        {
+            std::cout << "Which key to remove >> ";
+            char deleteToken[21];
+            std::cin.getline(deleteToken, 21);
+
+            if(db.DeleteEntry(deleteToken) == 0)
+            {
+                std::cout << "Unable to delete key: no such key exists." << std::endl;
             }
         }
         else break;

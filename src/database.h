@@ -51,7 +51,7 @@ public:
     // Returns 1, if entry is found.
     // Returns 0 otherwise, and keeps outValue unchanged
     int GetEntry(const char key[21], char outValue[21]);
-    int DeleteEntry(const char* key);
+    int DeleteEntry(const char key[21]);
 
 private:
     std::fstream m_mainDataFile;
@@ -108,7 +108,15 @@ private:
 
     bool IsEntryEmpty(const Entry* entry);
 
+    float CalcLoad();
     void SplitPage(unsigned page);
+
+    // Merges page when min limit is reached
+    // Attention: This method should only be called when
+    // the number of indices is higher than 3,
+    // otherwise it's behavior is undefined
+    void MergePage(unsigned page);
+    
     void DistributeEntries(unsigned page);
     void ExtendIndex(unsigned index);
     void CreateExtensionFile(unsigned extensionNumber);
