@@ -23,9 +23,7 @@ Database::Database()
 }
 
 Database::~Database()
-{
-    m_mainDataFile.close();
-}
+{ }
 
 int Database::InsertEntry(const char key[21], const char value[51])
 {
@@ -58,24 +56,25 @@ int Database::InsertEntry(const char key[21], const char value[51])
     // The final value is stored only when the program is closed
     m_numberOfEntries++;
 
-    // Test if max limit has been exceeded
-    float load = m_numberOfEntries / ((float)m_numberOfPages * ENTRIES_PER_PAGE);
-    if(load > MAX_LIMIT)
-    {
-        SplitPage(m_next);
-    }
-
     // Update index header
     ih.numberOfEntries++;
     
     UpdateIndexHeader(hash, ih);
     UpdateMainHeader();
 
+    // Test if max limit has been exceeded
+    float load = CalcLoad();
+    if(load > MAX_LIMIT)
+    {
+        SplitPage(m_next);
+    }
+
     return 0;
 }
 
-int Database::GetEntry(const char key[21], char outValue[51])
+int Database::GetEntry(const char key[21], std::vector<std::string>& outValues)
 {
+    bool anyEntryFound = false;
     std::fstream* dataFile = &m_mainDataFile;
     unsigned index_offset = CalcIndexOffsetFromKey(key);
     unsigned hash = CalcHash(key);
@@ -98,12 +97,13 @@ int Database::GetEntry(const char key[21], char outValue[51])
         {
             if(strcmp(e.key, key) == 0)
             {
-                strcpy(outValue, e.value);
-                return 1;
+                outValues.push_back(e.value);
+                anyEntryFound = true;
+                // strcpy(outValue, e.value);
             }
             entryNumber++;
             // All entries have been verified
-            if(entryNumber == ih.numberOfEntries) return 0;
+            if(entryNumber == ih.numberOfEntries) break;
         }
 
         index++;
@@ -114,6 +114,74 @@ int Database::GetEntry(const char key[21], char outValue[51])
         }
     }
 
+    if(anyEntryFound) return 1;
+    return 0;
+}
+
+int Database::DeleteEntry(const char key[21])
+{
+    std::fstream* dataFile = &m_mainDataFile;
+    unsigned hash = CalcHash(key);
+
+    IndexHeader ih;
+    dataFile->seekg(CalcIndexOffset(hash));
+    dataFile->read((char *)&ih, INDEX_HEADER_SIZE);
+
+     if(ih.numberOfEntries == 0) return 0;
+
+    unsigned numberOfEntries = ih.numberOfEntries;
+    unsigned index = 0;
+    for(unsigned i = 0; i < numberOfEntries;)
+    {
+        Entry e = { 0, 0 };
+        dataFile->read((char *)&e, ENTRY_SIZE);
+        
+        if(!IsEntryEmpty(&e))
+        {
+            if(strcmp(key, e.key) == 0)
+            {
+                // Move file pointer to the beggining of entry
+                dataFile->seekp((unsigned)dataFile->tellp() - ENTRY_SIZE);
+                dataFile->write("\0", 1);
+                // Move file pointer to the end of entry
+                dataFile->seekp((unsigned)dataFile->tellp() + ENTRY_SIZE - 1);
+
+                // Update main and index headers
+                ih.numberOfEntries--;
+                m_numberOfEntries--;
+            }
+
+            // Entry found
+            i++;
+        }
+
+        index++;
+
+        if(index % ENTRIES_PER_PAGE == 0 && i < numberOfEntries)
+        {
+            dataFile = GetExtensionFile(index / ENTRIES_PER_PAGE);
+            dataFile->seekp(CalcIndexOffset(hash, false));
+        }
+    }
+
+    // Saves main and index headers to file
+    UpdateIndexHeader(hash, ih);
+    UpdateMainHeader();
+
+    if(m_numberOfIndices > N) 
+    {
+        float load = CalcLoad();
+        if(load < MIN_LIMIT)
+        {
+            while(load < MIN_LIMIT && m_numberOfIndices > N)
+            {
+                MergePage(m_numberOfIndices - 1);
+                load = CalcLoad();
+            }
+        }
+    }
+    // Checks if at least one entry was deleted
+    if(ih.numberOfEntries < numberOfEntries) return 1;
     return 0;
 }
 
@@ -172,8 +240,19 @@ void Database::UpdateIndexHeader(unsigned index, const IndexHeader& ih)
 
 unsigned Database::CalcHash(const char key[21])
 {
-    unsigned hash = (unsigned)key[0] % (N * TwoToThePower(m_level));
-    if(hash < m_next) return (unsigned)key[0] % (N * TwoToThePower(m_level + 1));
+    int i = 0;
+    unsigned fnvprime = 16777619;
+    unsigned offsetbasis = 2166136261;
+    unsigned initialhash = offsetbasis;
+    while(key[i] != '\0')
+    {
+        initialhash = initialhash ^ key[i];
+        initialhash *= fnvprime;
+        i++;
+    }
+
+    unsigned hash = initialhash % (N * TwoToThePower(m_level));
+    if(hash < m_next) return initialhash % (N * TwoToThePower(m_level + 1));
     return hash;
 }
 
@@ -258,20 +337,68 @@ bool Database::IsEntryEmpty(const Entry* entry)
     return entry->key[0] == '\0';
 }
 
+float Database::CalcLoad()
+{
+    return m_numberOfEntries / ((float)m_numberOfPages * ENTRIES_PER_PAGE);
+}
+
 void Database::SplitPage(unsigned page)
 {
     m_numberOfPages++;
     m_numberOfIndices++;
+
     // Advances next pointer
-    m_next = (m_next + 1) % (N * (m_level + 1));
+    m_next = (m_next + 1) % (N * (TwoToThePower(m_level)));
     if(m_next == 0) m_level++;
 
     // Fill the next page with 0's
-    m_mainDataFile.seekp((m_numberOfPages + 1) * MAIN_INDEX_SIZE + HEADER_SIZE - 2);
+    m_mainDataFile.seekp((m_numberOfIndices + 1) * MAIN_INDEX_SIZE + HEADER_SIZE - 1);
     m_mainDataFile.write("", 1);
+
+    // Fill all the extensions at the new page index with 0's
+    for(unsigned i = 1; i <= m_currentMaxExtension; i++)
+    {
+        std::fstream* dataFile = GetExtensionFile(i);
+        dataFile->seekg((m_numberOfIndices + 1) * ENTRIES_PER_PAGE * ENTRY_SIZE - 1);
+        dataFile->write("\0", 1);
+    }
 
     DistributeEntries(page);
     UpdateMainHeader();
+}
+
+void Database::MergePage(unsigned page)
+{
+    if(m_level == 0 && m_next == 0) return;
+
+    IndexHeader ih;
+    m_mainDataFile.seekg(CalcIndexOffset(page, true));
+    m_mainDataFile.read((char *)&ih, INDEX_HEADER_SIZE);
+
+    
+    // Update next
+    if(m_next != 0) m_next--;
+    else
+    {
+        // Find next next pointer position
+        m_level--;
+        m_next = N * TwoToThePower(m_level) - 1;
+
+    }
+    DistributeEntries(page);
+
+    // Remove from the total number of pages the main
+    // index page and all index pages
+    m_numberOfPages -= ih.numberOfExtensions + 1;
+
+    // Update number of indices
+    m_numberOfIndices--;
+
+    ih.numberOfEntries = 0;
+    ih.numberOfExtensions = 0;
+
+    UpdateIndexHeader(page, ih);
+    UpdateMainHeader();    
 }
 
 void Database::DistributeEntries(unsigned page)
@@ -284,13 +411,14 @@ void Database::DistributeEntries(unsigned page)
     m_mainDataFile.read((char *)&originalIndexHeader, INDEX_HEADER_SIZE);
     if(originalIndexHeader.numberOfEntries == 0) return;
 
-    for(unsigned i = 0; i < originalIndexHeader.numberOfEntries;)
+    unsigned index = 0;
+    unsigned originalIndexNumberOfEntries = originalIndexHeader.numberOfEntries;
+    for(unsigned i = 0; i < originalIndexNumberOfEntries;)
     {
         Entry e = { 0, 0 };
         currentDataFile->read((char *)&e, ENTRY_SIZE);
 
-        // Check if entry is empty
-        if(e.key[0] != '\0')
+        if(!IsEntryEmpty(&e))
         {
             // Advance entry index
             i++;
@@ -319,15 +447,38 @@ void Database::DistributeEntries(unsigned page)
                     (unsigned)currentDataFile->tellp() + ENTRY_SIZE - 1);
 
                 // Insert into the new page
+                // Attention: InsertEntry will reposition the main data
+                // file pointers.
                 InsertEntry(e.key, e.value);
 
-                continue;
+                // Get pointer again, because it might no longer
+                // be in memory
+                if(index / ENTRIES_PER_PAGE != 0)
+                {
+                    currentDataFile = GetExtensionFile(index / ENTRIES_PER_PAGE);
+                }
             }
         }
+
+        index++;
+        
+        if(index % ENTRIES_PER_PAGE == 0 && index < originalIndexNumberOfEntries)
+        {
+            currentDataFile = GetExtensionFile(index / ENTRIES_PER_PAGE);
+            currentDataFile->seekg(CalcIndexOffset(page, false));
+        }
+        else
+        {
+            currentDataFile->seekg(
+                CalcIndexOffset(page, currentDataFile == &m_mainDataFile) + 
+                (index % ENTRIES_PER_PAGE) * ENTRY_SIZE + 
+                (currentDataFile == &m_mainDataFile ? INDEX_HEADER_SIZE : 0));  
+        }
+        
     }
+
     // Write header to file
-    m_mainDataFile.seekp(CalcIndexOffset(page));
-    m_mainDataFile.write((const char*)&originalIndexHeader, INDEX_HEADER_SIZE);
+    UpdateIndexHeader(page, originalIndexHeader);
 }
 
 void Database::ExtendIndex(unsigned index)
@@ -366,7 +517,7 @@ void Database::CreateExtensionFile(unsigned extensionNumber)
     );
 
     m_indexExtensionsDataFiles.back().second.seekp(
-        ENTRY_SIZE * m_numberOfIndices + INDEX_SIZE - 1);
+        ENTRY_SIZE * ENTRIES_PER_PAGE * m_numberOfIndices + INDEX_SIZE - 1);
     m_indexExtensionsDataFiles.back().second.write("\0", 1);
 
     m_indexExtensionsDataFiles.back().second.close();

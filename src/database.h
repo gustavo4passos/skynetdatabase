@@ -50,8 +50,8 @@ public:
     // Stores entry into outValue if entry is found in the database.
     // Returns 1, if entry is found.
     // Returns 0 otherwise, and keeps outValue unchanged
-    int GetEntry(const char key[21], char outValue[21]);
-    int DeleteEntry(const char* key);
+    int GetEntry(const char key[21], std::vector<std::string>& outValues);
+    int DeleteEntry(const char key[21]);
 
 private:
     std::fstream m_mainDataFile;
@@ -108,7 +108,15 @@ private:
 
     bool IsEntryEmpty(const Entry* entry);
 
+    float CalcLoad();
     void SplitPage(unsigned page);
+
+    // Merges page when min limit is reached
+    // Attention: This method should only be called when
+    // the number of indices is higher than 3,
+    // otherwise it's behavior is undefined
+    void MergePage(unsigned page);
+    
     void DistributeEntries(unsigned page);
     void ExtendIndex(unsigned index);
     void CreateExtensionFile(unsigned extensionNumber);
@@ -129,8 +137,8 @@ private:
 
     const float MIN_LIMIT = 0.3f;
     const float MAX_LIMIT = 0.8f;
-    const unsigned N = 3;
-    const unsigned ENTRIES_PER_PAGE = 2;
+    const unsigned N = 29;
+    const unsigned ENTRIES_PER_PAGE = 11;
     const std::string DATA_FILE_NAME_PREFIX = "data";
     const std::string DATA_FILE_NAME_EXTENSION = ".dat";
     const unsigned HEADER_SIZE = sizeof(Header);
